@@ -1,1 +1,464 @@
-<h1>Hello World!</h1>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>300KM Challenge Finale</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<style>
+html,body{margin:0;height:100%;background:#0b0f14;color:#fff;font-family:Arial,sans-serif;overflow:hidden}
+#header{
+    position:relative;
+    height:110px;
+    background:#121821;
+    padding:15px 25px;
+    box-sizing:border-box;
+}
+.card.gps{
+    min-width:120px;
+}
+#title{
+    font-size:34px;
+    font-weight:800;
+}
+
+#subtitle{
+    font-size:18px;
+    color:#9ca3af;
+}
+
+#cards{
+    position:absolute;
+    top:50%;
+    right:25px;
+    transform:translateY(-50%);
+    display:flex;
+    gap:24px;
+}
+.card{background:#1a2230;border:1px solid #2f3a4e;border-radius:12px;padding:10px 16px;min-width:180px}
+.label{font-size:12px;color:#9ca3af}
+.value{font-size:28px;font-weight:700}
+#progressWrapFooter{
+    width:100%;
+}
+#progressTrack{height:26px;background:#222;border-radius:13px;overflow:hidden}
+#progressBar{height:100%;width:0%;background:#3b82f6}
+#progressText{text-align:center;margin-bottom:6px}
+#content{
+    display:flex;
+    height:calc(100% - 180px)
+}
+#mainMap{
+    flex:1;
+}
+
+.leaflet-tile{
+    border:none !important;
+    outline:none !important;
+    image-rendering:auto !important;
+}
+.leaflet-container{background:#1f2937}
+.leaflet-tile{border:none !important;outline:none !important}
+.leaflet-pane img{image-rendering:auto}
+#side{width:360px;padding:15px;box-sizing:border-box;background:#111827}
+#miniTitle{font-weight:700;margin-bottom:10px}
+#miniMap{height:280px;border-radius:10px;border:2px solid #374151}
+#footer{
+    height:70px;
+    background:#121821;
+    display:flex;
+    align-items:center;
+    padding:0 25px;
+    box-sizing:border-box;
+}
+.live-dot{
+    width:9px;
+    height:9px;
+    background:#3b82f6;
+    border:2px solid #fff;
+    border-radius:50%;
+}
+.milestone-flag{
+    position:relative;
+    width:42px;
+    height:50px;
+}
+.milestone-flag .flag-label{
+    position:absolute;
+    left:50%;
+    top:0;
+    transform:translateX(-50%);
+    box-sizing:border-box;
+    padding:3px 6px;
+    background:rgba(15,23,42,.9);
+    border:2px solid #0f172a;
+    border-radius:6px;
+    color:#fff;
+    font-size:11px;
+    font-weight:900;
+    line-height:12px;
+    text-align:center;
+    white-space:nowrap;
+    box-shadow:0 2px 6px rgba(0,0,0,.35);
+}
+.milestone-flag .flag-emoji{
+    position:absolute;
+    left:50%;
+    bottom:0;
+    transform:translateX(-50%);
+    font-size:28px;
+    line-height:28px;
+    filter:drop-shadow(0 2px 3px rgba(0,0,0,.55));
+}
+button{background:#2563eb;color:#fff;border:none;padding:10px 16px;border-radius:8px;cursor:pointer}
+</style>
+</head>
+<body>
+<div id="header">
+<div id="title">300KM CHALLENGE FINALE</div>
+<div id="subtitle">MARATHON DAY</div>
+<div id="cards">
+<div class="card">
+    <div class="label">DISTANCE</div>
+    <div class="value" id="distance">0.00 km</div>
+</div>
+
+<div class="card">
+    <div class="label">REMAINING</div>
+    <div class="value" id="remaining">42.20 km</div>
+</div>
+
+<div class="card">
+    <div class="label">ELAPSED</div>
+    <div class="value" id="elapsed">00:00:00</div>
+</div>
+
+<div class="card gps">
+    <div class="label">GPS</div>
+    <div class="value" id="lastgps">LIVE</div>
+</div>
+</div>
+</div>
+
+
+
+
+<div id="content">
+<div id="mainMap"></div>
+<div id="side">
+<div id="miniTitle">LIVE SATELLITE</div>
+<div id="miniMap"></div>
+</div>
+</div>
+
+<div id="footer">
+<div id="progressWrapFooter">
+    <div id="progressText">0%</div>
+    <div id="progressTrack">
+        <div id="progressBar"></div>
+    </div>
+</div>
+</div>
+
+<script>
+let cinematicMode = false;
+let marathonFinished = false;
+const DEFAULT_LAT = 51.61844288587238;
+const DEFAULT_LNG = -3.027420043945313;
+const DEFAULT_ZOOM = 12;
+const mainMap=L.map('mainMap',{zoomControl:false,attributionControl:false});
+const miniMap=L.map('miniMap',{zoomControl:false,attributionControl:false});
+
+L.tileLayer(
+'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+).addTo(mainMap);
+
+L.tileLayer(
+'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+).addTo(miniMap);
+
+const icon=L.divIcon({
+    className:'',
+    html:'<div class="live-dot"></div>',
+    iconSize:[9,9]
+});
+
+let completedRoute=L.polyline(
+    [],
+    {
+        weight:5,
+        color:'#60a5fa',
+        smoothFactor:1,
+        renderer:L.canvas()
+    }
+).addTo(mainMap);
+
+let remainingRoute=L.polyline(
+    [],
+    {
+        weight:5,
+        color:'#111827',
+        smoothFactor:1,
+        renderer:L.canvas()
+    }
+).addTo(mainMap);
+
+let routeCoords = [];
+let milestoneMarkers = [];
+
+let gpsMarker=L.marker([0,0],{icon}).addTo(miniMap);
+
+let mainGpsMarker=L.marker(
+    [0,0],
+    {
+        icon:icon,
+        zIndexOffset:1000
+    }
+).addTo(mainMap);
+
+let miniRouteLine=L.polyline(
+    [],
+    {
+        weight:2,
+        color:'#3b82f6'
+    }
+).addTo(miniMap);
+
+async function loadRoute(){
+ const r=await fetch('/route');
+ const route=await r.json();
+routeCoords = route.map(
+    p => [p.lat,p.lon]
+);
+
+remainingRoute.setLatLngs(routeCoords);
+miniRouteLine.setLatLngs(routeCoords);
+await loadMilestones();
+ mainMap.setView(
+    [DEFAULT_LAT, DEFAULT_LNG],
+    DEFAULT_ZOOM
+);
+remainingRoute.bringToFront();
+completedRoute.bringToFront();
+mainGpsMarker.setZIndexOffset(1000);
+}
+
+async function loadMilestones(){
+
+    const response = await fetch('/milestones');
+    const milestones = await response.json();
+
+    milestoneMarkers.forEach(
+        marker => marker.remove()
+    );
+    milestoneMarkers = [];
+
+    milestones.forEach(milestone => {
+
+        const isFinish = milestone.type === 'finish';
+        const icon = L.divIcon({
+            className:'',
+            html:
+                '<div class="milestone-flag ' +
+                (isFinish ? 'finish' : '') +
+                '">' +
+                '<div class="flag-label">' +
+                milestone.name +
+                '</div>' +
+                '<div class="flag-emoji">' +
+                (isFinish ? '🏁' : '🚩') +
+                '</div>' +
+                '</div>',
+            iconSize:[42,50],
+            iconAnchor:[21,50]
+        });
+
+        const marker = L.marker(
+            [milestone.lat, milestone.lon],
+            {
+                icon:icon,
+                interactive:false,
+                zIndexOffset:700
+            }
+        ).addTo(mainMap);
+
+        milestoneMarkers.push(marker);
+    });
+}
+
+function formatElapsedSeconds(totalSeconds){
+
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    return String(hours).padStart(2,'0') + ':' +
+        String(minutes).padStart(2,'0') + ':' +
+        String(seconds).padStart(2,'0');
+}
+
+async function update(){
+
+ const stats=await (await fetch('/stats')).json();
+
+ elapsed.innerText = formatElapsedSeconds(
+    stats.elapsed_seconds || 0
+);
+
+if(
+    !marathonFinished &&
+    (stats.progress||0) >= 100
+){
+
+    marathonFinished = true;
+
+    await fetch("/hide-capture", {
+        method: "POST"
+    });
+
+    elapsed.innerText = formatElapsedSeconds(
+        stats.elapsed_seconds || 0
+    );
+
+    window.location.href = "/finish";
+    return;
+}
+
+ distance.innerText=(stats.distance_km||0).toFixed(2)+' km';
+ remaining.innerText=(stats.remaining_km||0).toFixed(2)+' km';
+ //pace.innerText=(stats.pace_min_km||0)+' min/km';
+ //eta.innerText=stats.eta_clock||'--:--';
+
+ const gpsAge=stats.last_update_seconds||0;
+
+if(gpsAge<=15){
+    lastgps.innerText='LIVE';
+}
+else if(gpsAge<=60){
+    lastgps.innerText='GOOD';
+}
+else{
+    lastgps.innerText='DELAYED';
+}
+
+ progressBar.style.width=(stats.progress||0)+'%';
+ progressText.innerText=(stats.progress||0)+'%';
+ renderRouteProgress(stats);
+
+
+
+ const pts=await (await fetch('/points')).json();
+ if(pts.length){
+
+   const p=pts[pts.length-1];
+   console.log(
+    "GPS:",
+    p.lat,
+    p.lon,
+    "Progress:",
+    stats.progress
+);
+
+   gpsMarker.setLatLng([p.lat,p.lon]);
+
+mainGpsMarker.setLatLng([p.lat,p.lon]);
+
+miniMap.setView([p.lat,p.lon],17);
+}
+
+}
+function cinematicZoom(){
+
+    if(cinematicMode) return;
+
+    cinematicMode = true;
+
+    fetch('/points')
+    .then(r => r.json())
+    .then(points => {
+
+        if(!points.length){
+            cinematicMode = false;
+            return;
+        }
+
+        const p = points[points.length - 1];
+
+        // Snap to runner
+        mainMap.setView(
+            [p.lat, p.lon],
+            15
+        );
+
+        // Stay there 15 seconds
+        setTimeout(() => {
+
+            // Snap back to overview
+            mainMap.setView(
+                [DEFAULT_LAT, DEFAULT_LNG],
+                DEFAULT_ZOOM
+            );
+
+            cinematicMode = false;
+
+        }, 15000);
+
+    });
+}
+
+async function newMarathon(){
+ if(!confirm('Start a new marathon?')) return;
+ await fetch('/new-marathon',{method:'POST'});
+ location.reload();
+}
+loadRoute();
+function renderRouteProgress(stats){
+
+    if(routeCoords.length === 0) return;
+
+    const routeIndex = Math.max(
+        0,
+        Math.min(
+            stats.route_index || 0,
+            routeCoords.length - 1
+        )
+    );
+
+    const routePosition = stats.route_position
+        ? [stats.route_position.lat, stats.route_position.lon]
+        : null;
+
+    let completed = routeCoords.slice(
+        0,
+        routeIndex
+    );
+
+    if(routePosition){
+        completed.push(routePosition);
+    }
+
+    let remaining = routeCoords.slice(
+        routeIndex
+    );
+
+    if(routePosition){
+        remaining = [
+            routePosition,
+            ...remaining
+        ];
+    }
+
+completedRoute.setLatLngs(
+    completed
+);
+
+remainingRoute.setLatLngs(
+    remaining
+);
+}
+update();
+setInterval(update,1000);
+setInterval(cinematicZoom,30000);
+</script>
+</body>
+</html>
