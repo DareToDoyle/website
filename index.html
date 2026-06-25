@@ -151,6 +151,97 @@ body.finished #footer{
 body.finished #finishView{
     display:flex;
 }
+#loadingView,
+#startingSoonView{
+    display:none;
+    min-height:100vh;
+    padding:32px 20px;
+    box-sizing:border-box;
+    background:#0b0f14;
+    text-align:center;
+    align-items:center;
+    justify-content:center;
+    flex-direction:column;
+}
+#loadingView h1,
+#startingSoonView h1{
+    font-size:clamp(32px, 7vw, 54px);
+    font-weight:800;
+    margin:0 0 10px;
+    line-height:1.05;
+    text-transform:uppercase;
+}
+#loadingView .screen-title,
+#startingSoonView .screen-title{
+    font-size:clamp(34px, 9vw, 72px);
+    font-weight:800;
+    margin:0 0 18px;
+    line-height:1;
+}
+#startingCountdown{
+    display:grid;
+    grid-template-columns:repeat(4, minmax(64px, 1fr));
+    gap:10px;
+    width:min(520px, 100%);
+    margin:10px 0 22px;
+}
+.countdown-cell{
+    background:#1a2230;
+    border:1px solid #2f3a4e;
+    border-radius:12px;
+    padding:12px 10px;
+}
+.countdown-value{
+    display:block;
+    font-size:clamp(28px, 8vw, 48px);
+    font-weight:800;
+    line-height:1;
+}
+.countdown-label{
+    display:block;
+    margin-top:6px;
+    color:#9ca3af;
+    font-size:12px;
+    font-weight:700;
+}
+.screen-message{
+    max-width:640px;
+    color:#9ca3af;
+    font-size:clamp(16px, 3vw, 20px);
+    line-height:1.5;
+}
+.spinner{
+    width:54px;
+    height:54px;
+    margin-bottom:22px;
+    border:5px solid #1f2937;
+    border-top-color:#3b82f6;
+    border-radius:50%;
+    animation:spin 1s linear infinite;
+}
+@keyframes spin{
+    to{transform:rotate(360deg)}
+}
+body.loading,
+body.starting-soon{
+    height:auto;
+    min-height:100vh;
+    overflow:auto;
+}
+body.loading #header,
+body.loading #content,
+body.loading #footer,
+body.loading #finishView,
+body.starting-soon #header,
+body.starting-soon #content,
+body.starting-soon #footer,
+body.starting-soon #finishView{
+    display:none;
+}
+body.loading #loadingView,
+body.starting-soon #startingSoonView{
+    display:flex;
+}
 .live-dot{
     width:9px;
     height:9px;
@@ -257,7 +348,7 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 16px;border-radius
 }
 </style>
 </head>
-<body>
+<body class="loading">
 <div id="header">
 <div id="title">300KM CHALLENGE FINALE</div>
 <div id="subtitle">MARATHON DAY</div>
@@ -323,6 +414,38 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 16px;border-radius
     >
 </div>
 
+<div id="loadingView">
+    <div class="spinner"></div>
+    <h1>300KM Challenge Finale</h1>
+    <div class="screen-title">Loading live tracker...</div>
+</div>
+
+<div id="startingSoonView">
+    <h1>300KM Challenge Finale</h1>
+    <div class="screen-title">Starting Soon</div>
+    <div id="startingCountdown">
+        <div class="countdown-cell">
+            <span class="countdown-value" id="countdownDays">00</span>
+            <span class="countdown-label">DAYS</span>
+        </div>
+        <div class="countdown-cell">
+            <span class="countdown-value" id="countdownHours">00</span>
+            <span class="countdown-label">HOURS</span>
+        </div>
+        <div class="countdown-cell">
+            <span class="countdown-value" id="countdownMinutes">00</span>
+            <span class="countdown-label">MINS</span>
+        </div>
+        <div class="countdown-cell">
+            <span class="countdown-value" id="countdownSeconds">00</span>
+            <span class="countdown-label">SECS</span>
+        </div>
+    </div>
+    <div class="screen-message">
+        Live tracking will begin once the server is online.
+    </div>
+</div>
+
 <script>
 let cinematicMode = false;
 let marathonFinished = false;
@@ -330,7 +453,9 @@ let backendConnected = true;
 let updateTimer = null;
 let healthTimer = null;
 let cinematicTimer = null;
+let countdownTimer = null;
 const API = "https://marathon-tracker.tail75edaa.ts.net";
+const START_TIME = new Date('2026-06-27T05:00:00+01:00');
 const DEFAULT_LAT = 51.61844288587238;
 const DEFAULT_LNG = -3.027420043945313;
 const DESKTOP_OVERVIEW_ZOOM = 12;
@@ -451,6 +576,41 @@ function api(path){
     return `${API}${path}`;
 }
 
+function showLoadingView(){
+    document.body.classList.add('loading');
+    document.body.classList.remove(
+        'starting-soon',
+        'finished'
+    );
+}
+
+function showStartingSoonView(){
+    if(marathonFinished) return;
+
+    document.body.classList.add('starting-soon');
+    document.body.classList.remove(
+        'loading',
+        'finished'
+    );
+}
+
+function showTrackerView(){
+    if(marathonFinished) return;
+
+    document.body.classList.remove(
+        'loading',
+        'starting-soon'
+    );
+
+    mainMap.invalidateSize();
+    miniMap.invalidateSize();
+}
+
+function markValidPayloadReceived(){
+    setBackendConnected(true);
+    showTrackerView();
+}
+
 function setBackendConnected(isConnected){
     backendConnected = isConnected;
     statusBadge.classList.toggle(
@@ -478,7 +638,26 @@ async function fetchJson(path, options){
         );
     }
 
-    return response.json();
+    const payload = await response.json();
+    markValidPayloadReceived();
+    return payload;
+}
+
+function updateStartingCountdown(){
+    const remainingMs = Math.max(
+        START_TIME.getTime() - Date.now(),
+        0
+    );
+    const totalSeconds = Math.floor(remainingMs / 1000);
+    const days = Math.floor(totalSeconds / 86400);
+    const hours = Math.floor((totalSeconds % 86400) / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    countdownDays.innerText = String(days).padStart(2,'0');
+    countdownHours.innerText = String(hours).padStart(2,'0');
+    countdownMinutes.innerText = String(minutes).padStart(2,'0');
+    countdownSeconds.innerText = String(seconds).padStart(2,'0');
 }
 
 async function loadRoute(){
@@ -554,10 +733,15 @@ function showFinishView(stats){
         stats.elapsed_seconds || 0
     );
     document.body.classList.add('finished');
+    document.body.classList.remove(
+        'loading',
+        'starting-soon'
+    );
 
     clearInterval(updateTimer);
     clearInterval(healthTimer);
     clearInterval(cinematicTimer);
+    clearInterval(countdownTimer);
 }
 
 async function update(){
@@ -624,6 +808,7 @@ miniMap.setView(
 }
 catch(error){
     setBackendConnected(false);
+    showStartingSoonView();
 }
 
 }
@@ -667,6 +852,7 @@ function cinematicZoom(){
     .catch(() => {
         cinematicMode = false;
         setBackendConnected(false);
+        showStartingSoonView();
     });
 }
 
@@ -686,11 +872,15 @@ async function pollHealth(){
     }
     catch(error){
         setBackendConnected(false);
+        showStartingSoonView();
     }
 }
 
 loadRoute().catch(
-    () => setBackendConnected(false)
+    () => {
+        setBackendConnected(false);
+        showStartingSoonView();
+    }
 );
 
 window.addEventListener('resize', () => {
@@ -751,6 +941,8 @@ updateTimer = setInterval(update,1000);
 pollHealth();
 healthTimer = setInterval(pollHealth,10000);
 cinematicTimer = setInterval(cinematicZoom,30000);
+updateStartingCountdown();
+countdownTimer = setInterval(updateStartingCountdown,1000);
 </script>
 </body>
 </html>
