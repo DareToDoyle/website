@@ -69,12 +69,45 @@ body{height:100vh;display:flex;flex-direction:column}
 .card{background:#1a2230;border:1px solid #2f3a4e;border-radius:12px;padding:10px 16px;min-width:160px;box-sizing:border-box}
 .label{font-size:12px;color:#9ca3af}
 .value{font-size:28px;font-weight:700}
-#progressWrapFooter{
-    width:100%;
+#progressCard{
+    background:#1a2230;
+    border:1px solid #2f3a4e;
+    border-radius:12px;
+    padding:14px 16px 16px;
+    box-sizing:border-box;
 }
-#progressTrack{height:26px;background:#222;border-radius:13px;overflow:hidden}
-#progressBar{height:100%;width:0%;background:#3b82f6}
-#progressText{text-align:center;margin-bottom:6px}
+#progressHeader{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:10px;
+}
+#progressTitle{
+    color:#9ca3af;
+    font-size:12px;
+    font-weight:800;
+}
+#progressTrack{
+    height:16px;
+    background:#0b0f14;
+    border:1px solid #334155;
+    border-radius:999px;
+    overflow:hidden;
+    box-shadow:inset 0 1px 6px rgba(0,0,0,.45);
+}
+#progressBar{
+    height:100%;
+    width:0%;
+    background:linear-gradient(90deg,#2563eb,#60a5fa);
+    border-radius:999px;
+}
+#progressText{
+    color:#fff;
+    font-size:20px;
+    font-weight:800;
+    line-height:1;
+}
 #content{
     display:flex;
     flex:1 1 auto;
@@ -82,6 +115,7 @@ body{height:100vh;display:flex;flex-direction:column}
 }
 #mainMap{
     flex:1;
+    min-width:0;
 }
 
 .leaflet-tile{
@@ -92,17 +126,117 @@ body{height:100vh;display:flex;flex-direction:column}
 .leaflet-container{background:#1f2937;touch-action:pan-y}
 .leaflet-tile{border:none !important;outline:none !important}
 .leaflet-pane img{image-rendering:auto}
-#side{width:360px;padding:15px;box-sizing:border-box;background:#111827}
+#side{
+    width:360px;
+    padding:15px;
+    box-sizing:border-box;
+    background:#111827;
+    display:flex;
+    flex-direction:column;
+    gap:16px;
+    overflow:auto;
+}
+.dashboard-panel{
+    background:#1a2230;
+    border:1px solid #2f3a4e;
+    border-radius:12px;
+    box-sizing:border-box;
+}
+#satellitePanel{
+    padding:12px;
+}
 #miniTitle{font-weight:700;margin-bottom:10px}
-#miniMap{height:280px;border-radius:10px;border:2px solid #374151}
+#miniMap{height:255px;border-radius:10px;border:2px solid #374151}
+#whyCard{
+    padding:16px;
+}
+#whyCard .panel-kicker{
+    color:#9ca3af;
+    font-size:12px;
+    font-weight:800;
+    margin-bottom:8px;
+    text-transform:uppercase;
+}
+#whyCard h2{
+    font-size:22px;
+    line-height:1.15;
+    margin:0 0 10px;
+}
+#whyCard p{
+    color:#cbd5e1;
+    font-size:14px;
+    line-height:1.45;
+    margin:0 0 14px;
+}
+#whyActions{
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+}
+.action-link{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    min-height:44px;
+    padding:0 14px;
+    border-radius:10px;
+    background:#2563eb;
+    color:#fff;
+    font-size:14px;
+    font-weight:800;
+    text-decoration:none;
+    transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.action-link.secondary{
+    background:#0f172a;
+    border:1px solid #334155;
+}
+.action-link:hover{
+    background:#3b82f6;
+    box-shadow:0 10px 22px rgba(37,99,235,.25);
+    transform:translateY(-2px);
+}
+.action-link.secondary:hover{
+    background:#1e293b;
+    box-shadow:0 10px 22px rgba(15,23,42,.35);
+}
 #footer{
     min-height:70px;
     background:#121821;
     display:flex;
     align-items:center;
+    justify-content:center;
     padding:0 25px;
     box-sizing:border-box;
     flex:0 0 auto;
+}
+#socialLinks{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:12px;
+    flex-wrap:wrap;
+}
+.social-link{
+    width:44px;
+    height:44px;
+    border-radius:50%;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    background:#1a2230;
+    border:1px solid #2f3a4e;
+    color:#fff;
+    font-size:13px;
+    font-weight:900;
+    text-decoration:none;
+    transition:transform .18s ease, border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.social-link:hover{
+    transform:translateY(-3px) scale(1.04);
+    background:#2563eb;
+    border-color:#60a5fa;
+    box-shadow:0 10px 20px rgba(37,99,235,.24);
 }
 #finishView{
     display:none;
@@ -315,24 +449,40 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 16px;border-radius
     }
     #content{
         flex-direction:column;
-        min-height:560px;
+        min-height:0;
     }
     #mainMap{
+        order:2;
         min-height:360px;
     }
     #side{
-        width:100%;
-        padding:12px 16px 16px;
+        display:contents;
+    }
+    #whyCard{
+        order:1;
+        margin:14px 16px 12px;
+    }
+    #progressCard{
+        order:3;
+        margin:14px 16px 0;
+    }
+    #satellitePanel{
+        order:4;
+        margin:14px 16px 16px;
     }
     #miniMap{
         height:220px;
     }
     #footer{
-        position:sticky;
-        bottom:0;
-        min-height:76px;
-        padding:0 16px;
-        z-index:1000;
+        position:static;
+        min-height:78px;
+        padding:14px 16px 18px;
+    }
+    #socialLinks{
+        gap:10px;
+    }
+    .action-link{
+        flex:1 1 150px;
     }
 }
 @media (max-width: 430px){
@@ -382,17 +532,49 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 16px;border-radius
 <div id="content">
 <div id="mainMap"></div>
 <div id="side">
-<div id="miniTitle">LIVE SATELLITE</div>
-<div id="miniMap"></div>
+<div id="progressCard">
+    <div id="progressHeader">
+        <div id="progressTitle">PROGRESS</div>
+        <div id="progressText">0%</div>
+    </div>
+    <div id="progressTrack">
+        <div id="progressBar"></div>
+    </div>
+</div>
+<div id="satellitePanel" class="dashboard-panel">
+    <div id="miniTitle">LIVE SATELLITE</div>
+    <div id="miniMap"></div>
+</div>
+<div id="whyCard" class="dashboard-panel">
+    <div class="panel-kicker">Why am I doing this?</div>
+    <h2>Placeholder heading</h2>
+    <p>Placeholder body text. Replace this with my fundraising information, personal story or challenge description.</p>
+    <div id="whyActions">
+        <a
+            class="action-link"
+            href="https://example.com"
+            target="_blank"
+            rel="noopener noreferrer"
+        >Find out more</a>
+        <a
+            class="action-link secondary"
+            href="https://example.com"
+            target="_blank"
+            rel="noopener noreferrer"
+        >Follow the journey</a>
+    </div>
+</div>
 </div>
 </div>
 
 <div id="footer">
-<div id="progressWrapFooter">
-    <div id="progressText">0%</div>
-    <div id="progressTrack">
-        <div id="progressBar"></div>
-    </div>
+<div id="socialLinks">
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="Discord">DC</a>
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="Instagram">IG</a>
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="X / Twitter">X</a>
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="GitHub">GH</a>
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="YouTube">YT</a>
+    <a class="social-link" href="https://example.com" target="_blank" rel="noopener noreferrer" aria-label="Steam">ST</a>
 </div>
 </div>
 
