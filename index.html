@@ -1438,14 +1438,11 @@ function enterDisconnectedState(){
     stopTrackerPolling();
     setBackendConnected(false);
 
-    if(hasTrackerData() || routeLoaded || lastStats){
+    if(hasTrackerData()){
         showTrackerView();
     }
     else{
-        showLoadingView(
-            'Disconnected',
-            false
-        );
+        showStartingSoonView();
     }
 
     startHealthPolling(
