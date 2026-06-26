@@ -689,15 +689,16 @@ let routeLoaded = false;
 let milestonesLoaded = false;
 let lastStats = null;
 let lastPoints = [];
+let pointsCursor = 0;
+let snapshotSessionId = '';
+let snapshotFailureCount = 0;
 let healthIntervalMs = null;
-let pointsTimer = null;
+let snapshotTimer = null;
 let cinematicReturnTimer = null;
 let inFlightHealth = false;
-let inFlightStats = false;
-let inFlightPoints = false;
+let inFlightSnapshot = false;
 let inFlightRoute = false;
 let inFlightMilestones = false;
-let updateTimer = null;
 let healthTimer = null;
 let cinematicTimer = null;
 let countdownTimer = null;
@@ -706,9 +707,8 @@ const START_TIME = new Date('2026-06-27T05:00:00+01:00');
 const REQUEST_TIMEOUT_MS = 10000;
 const HEALTH_TIMEOUT_MS = 10000;
 const DISCONNECTED_HEALTH_INTERVAL_MS = 5000;
-const CONNECTED_HEALTH_INTERVAL_MS = 20000;
-const STATS_INTERVAL_MS = 2000;
-const POINTS_INTERVAL_MS = 5000;
+const SNAPSHOT_INTERVAL_MS = 60000;
+const SNAPSHOT_FAILURE_LIMIT = 2;
 const CINEMATIC_INTERVAL_MS = 30000;
 const GPS_FRESH_SECONDS = 15;
 const GPS_STALE_SECONDS = 60;
@@ -929,6 +929,21 @@ function isStatsPayload(payload){
     );
 }
 
+function isSnapshotPayload(payload){
+    return Boolean(
+        payload
+        && typeof payload === 'object'
+        && typeof payload.status === 'string'
+        && payload.stats
+        && typeof payload.stats === 'object'
+        && Array.isArray(payload.new_points)
+        && isFiniteNumber(payload.next_index)
+        && isFiniteNumber(payload.total_points)
+        && typeof payload.session_id === 'string'
+        && typeof payload.reset_required === 'boolean'
+    );
+}
+
 function isArrayPayload(payload){
     return Array.isArray(payload);
 }
@@ -1145,14 +1160,12 @@ function showFinishView(stats){
         'starting-soon'
     );
 
-    clearInterval(updateTimer);
-    clearInterval(pointsTimer);
+    clearInterval(snapshotTimer);
     clearInterval(healthTimer);
     clearInterval(cinematicTimer);
     clearInterval(countdownTimer);
     clearTimeout(cinematicReturnTimer);
-    updateTimer = null;
-    pointsTimer = null;
+    snapshotTimer = null;
     healthTimer = null;
     cinematicTimer = null;
     countdownTimer = null;
@@ -1234,6 +1247,38 @@ function applyPoints(points){
         && isFiniteNumber(p.lon)
     ));
 
+    updateLatestPointMarker();
+}
+
+function appendPoints(points){
+    const existing = new Set(
+        lastPoints.map(
+            p => `${p.time}|${p.lat}|${p.lon}`
+        )
+    );
+
+    points.forEach(point => {
+        if(
+            !isFiniteNumber(point.lat)
+            || !isFiniteNumber(point.lon)
+        ){
+            return;
+        }
+
+        const key = `${point.time}|${point.lat}|${point.lon}`;
+
+        if(existing.has(key)){
+            return;
+        }
+
+        existing.add(key);
+        lastPoints.push(point);
+    });
+
+    updateLatestPointMarker();
+}
+
+function updateLatestPointMarker(){
     if(!lastPoints.length){
         return;
     }
@@ -1259,66 +1304,67 @@ function applyPoints(points){
     );
 }
 
-async function refreshStats(){
+async function refreshSnapshot(){
     if(
         marathonFinished
         || connectionState === 'disconnected'
-        || inFlightStats
+        || inFlightSnapshot
     ){
         return;
     }
 
-    inFlightStats = true;
+    inFlightSnapshot = true;
 
     try{
-        const stats=await fetchJsonSafely(
-            '/stats',
+        const snapshot=await fetchJsonSafely(
+            '/snapshot?after=' +
+            encodeURIComponent(pointsCursor) +
+            '&session_id=' +
+            encodeURIComponent(snapshotSessionId),
             {
-                validate:isStatsPayload
+                validate:isSnapshotPayload
             }
         );
 
-        applyStats(stats);
+        if(snapshot.reset_required){
+            lastPoints = [];
+            pointsCursor = 0;
+            snapshotSessionId = snapshot.session_id || '';
+
+            const reloadedSnapshot=await fetchJsonSafely(
+                '/snapshot?after=0&session_id=' +
+                encodeURIComponent(snapshotSessionId),
+                {
+                    validate:isSnapshotPayload
+                }
+            );
+
+            processSnapshot(reloadedSnapshot);
+            return;
+        }
+
+        processSnapshot(snapshot);
     }
     catch(error){
+        snapshotFailureCount += 1;
         console.warn(error.message);
+
+        if(snapshotFailureCount >= SNAPSHOT_FAILURE_LIMIT){
+            await confirmSnapshotDisconnect();
+        }
     }
     finally{
-        inFlightStats = false;
+        inFlightSnapshot = false;
     }
 }
 
-async function refreshPoints(){
-    if(
-        marathonFinished
-        || connectionState === 'disconnected'
-        || inFlightPoints
-    ){
-        return;
-    }
-
-    inFlightPoints = true;
-
-    try{
-        const points=await fetchJsonSafely(
-            '/points',
-            {
-                validate:isArrayPayload
-            }
-        );
-
-        applyPoints(points);
-
-        if(lastStats){
-            applyStats(lastStats);
-        }
-    }
-    catch(error){
-        console.warn(error.message);
-    }
-    finally{
-        inFlightPoints = false;
-    }
+function processSnapshot(snapshot){
+    snapshotFailureCount = 0;
+    setBackendConnected(true);
+    snapshotSessionId = snapshot.session_id || snapshotSessionId;
+    appendPoints(snapshot.new_points);
+    pointsCursor = Number(snapshot.next_index) || pointsCursor;
+    applyStats(snapshot.stats);
 }
 function cinematicZoom(){
 
@@ -1371,15 +1417,19 @@ function startHealthPolling(intervalMs){
     );
 }
 
-function stopTrackerPolling(){
-    if(updateTimer){
-        clearInterval(updateTimer);
-        updateTimer = null;
+function stopHealthPolling(){
+    if(healthTimer){
+        clearInterval(healthTimer);
+        healthTimer = null;
     }
 
-    if(pointsTimer){
-        clearInterval(pointsTimer);
-        pointsTimer = null;
+    healthIntervalMs = null;
+}
+
+function stopTrackerPolling(){
+    if(snapshotTimer){
+        clearInterval(snapshotTimer);
+        snapshotTimer = null;
     }
 
     if(cinematicTimer){
@@ -1398,14 +1448,9 @@ function stopTrackerPolling(){
 function startTrackerPolling(){
     stopTrackerPolling();
 
-    updateTimer = setInterval(
-        refreshStats,
-        STATS_INTERVAL_MS
-    );
-
-    pointsTimer = setInterval(
-        refreshPoints,
-        POINTS_INTERVAL_MS
+    snapshotTimer = setInterval(
+        refreshSnapshot,
+        SNAPSHOT_INTERVAL_MS
     );
 
     cinematicTimer = setInterval(
@@ -1476,21 +1521,53 @@ async function enterConnectedState(){
             return;
         }
 
-        await refreshStats();
-        await refreshPoints();
+        await refreshSnapshot();
 
         if(connectionState === 'disconnected'){
             return;
         }
 
         startTrackerPolling();
-        startHealthPolling(
-            CONNECTED_HEALTH_INTERVAL_MS
-        );
+        stopHealthPolling();
     }
     catch(error){
         console.warn(error.message);
         enterDisconnectedState();
+    }
+}
+
+async function confirmSnapshotDisconnect(){
+    if(
+        marathonFinished
+        || inFlightHealth
+    ){
+        return;
+    }
+
+    inFlightHealth = true;
+
+    try{
+        const health = await fetchJsonSafely(
+            '/health',
+            {
+                timeoutMs:HEALTH_TIMEOUT_MS,
+                validate:isHealthPayload
+            }
+        );
+
+        if(health.status !== 'ok' && health.status !== 'online'){
+            throw new Error('Server is not healthy');
+        }
+
+        snapshotFailureCount = 0;
+        setBackendConnected(true);
+    }
+    catch(error){
+        console.warn(error.message);
+        enterDisconnectedState();
+    }
+    finally{
+        inFlightHealth = false;
     }
 }
 
