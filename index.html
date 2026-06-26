@@ -1438,12 +1438,15 @@ function enterDisconnectedState(){
     stopTrackerPolling();
     setBackendConnected(false);
 
-    if(hasTrackerData()){
-        showTrackerView();
-    }
-    else{
-        showStartingSoonView();
-    }
+    if(hasTrackerData() || routeLoaded || lastStats){
+    showTrackerView();
+}
+else{
+    showLoadingView(
+        'Disconnected',
+        false
+    );
+}
 
     startHealthPolling(
         DISCONNECTED_HEALTH_INTERVAL_MS
