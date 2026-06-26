@@ -682,13 +682,35 @@ button{background:#2563eb;color:#fff;border:none;padding:12px 16px;border-radius
 <script>
 let cinematicMode = false;
 let marathonFinished = false;
-let backendConnected = true;
+let connectionState = 'connecting';
+let trackerInitialised = false;
+let routeLoaded = false;
+let milestonesLoaded = false;
+let lastStats = null;
+let lastPoints = [];
+let healthIntervalMs = null;
+let pointsTimer = null;
+let cinematicReturnTimer = null;
+let inFlightHealth = false;
+let inFlightStats = false;
+let inFlightPoints = false;
+let inFlightRoute = false;
+let inFlightMilestones = false;
 let updateTimer = null;
 let healthTimer = null;
 let cinematicTimer = null;
 let countdownTimer = null;
 const API = "https://marathon-tracker.tail75edaa.ts.net";
 const START_TIME = new Date('2026-06-27T05:00:00+01:00');
+const REQUEST_TIMEOUT_MS = 5000;
+const HEALTH_TIMEOUT_MS = 4000;
+const DISCONNECTED_HEALTH_INTERVAL_MS = 5000;
+const CONNECTED_HEALTH_INTERVAL_MS = 20000;
+const STATS_INTERVAL_MS = 1500;
+const POINTS_INTERVAL_MS = 4000;
+const CINEMATIC_INTERVAL_MS = 30000;
+const GPS_FRESH_SECONDS = 15;
+const GPS_STALE_SECONDS = 60;
 const DEFAULT_LAT = 51.61844288587238;
 const DEFAULT_LNG = -3.027420043945313;
 const DESKTOP_OVERVIEW_ZOOM = 12;
@@ -809,7 +831,23 @@ function api(path){
     return `${API}${path}`;
 }
 
-function showLoadingView(){
+function setLoadingScreen(title, showSpinner){
+    const loadingTitle = loadingView.querySelector('.screen-title');
+    const spinner = loadingView.querySelector('.spinner');
+
+    if(loadingTitle){
+        loadingTitle.innerText = title;
+    }
+
+    if(spinner){
+        spinner.style.display = showSpinner ? 'block' : 'none';
+    }
+}
+
+function showLoadingView(title = 'Connecting to live tracker...', showSpinner = true){
+    if(marathonFinished) return;
+
+    setLoadingScreen(title, showSpinner);
     document.body.classList.add('loading');
     document.body.classList.remove(
         'starting-soon',
@@ -839,13 +877,7 @@ function showTrackerView(){
     miniMap.invalidateSize();
 }
 
-function markValidPayloadReceived(){
-    setBackendConnected(true);
-    showTrackerView();
-}
-
 function setBackendConnected(isConnected){
-    backendConnected = isConnected;
     statusBadge.classList.toggle(
         'disconnected',
         !isConnected
@@ -859,11 +891,75 @@ function setBackendConnected(isConnected){
     }
 }
 
-async function fetchJson(path, options){
-    const response = await fetch(
-        api(path),
-        options
+function setStatusBadge(text, isDisconnected = false){
+    statusBadge.classList.toggle(
+        'disconnected',
+        isDisconnected
     );
+    statusBadge.innerText = text;
+}
+
+function isFiniteNumber(value){
+    return Number.isFinite(Number(value));
+}
+
+function isHealthPayload(payload){
+    return Boolean(
+        payload
+        && typeof payload === 'object'
+        && typeof payload.status === 'string'
+    );
+}
+
+function isStatsPayload(payload){
+    return Boolean(
+        payload
+        && typeof payload === 'object'
+        && isFiniteNumber(payload.distance_km)
+        && isFiniteNumber(payload.remaining_km)
+        && isFiniteNumber(payload.progress)
+        && isFiniteNumber(payload.elapsed_seconds)
+    );
+}
+
+function isArrayPayload(payload){
+    return Array.isArray(payload);
+}
+
+async function fetchJsonSafely(path, options = {}){
+    const {
+        timeoutMs = REQUEST_TIMEOUT_MS,
+        validate = null,
+        fetchOptions = {}
+    } = options;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+        () => controller.abort(),
+        timeoutMs
+    );
+
+    let response;
+
+    try{
+        response = await fetch(
+            api(path),
+            {
+                ...fetchOptions,
+                signal:controller.signal
+            }
+        );
+    }
+    catch(error){
+        throw new Error(
+            error.name === 'AbortError'
+                ? `Request timed out: ${path}`
+                : `Request failed: ${path}`
+        );
+    }
+    finally{
+        clearTimeout(timeout);
+    }
 
     if(!response.ok){
         throw new Error(
@@ -871,8 +967,33 @@ async function fetchJson(path, options){
         );
     }
 
-    const payload = await response.json();
-    markValidPayloadReceived();
+    const contentType = (
+        response.headers.get('content-type') || ''
+    ).toLowerCase();
+
+    if(!contentType.includes('application/json')){
+        throw new Error(
+            `Expected JSON from ${path}`
+        );
+    }
+
+    let payload;
+
+    try{
+        payload = await response.json();
+    }
+    catch(error){
+        throw new Error(
+            `Invalid JSON from ${path}`
+        );
+    }
+
+    if(validate && !validate(payload)){
+        throw new Error(
+            `Unexpected response from ${path}`
+        );
+    }
+
     return payload;
 }
 
@@ -894,30 +1015,67 @@ function updateStartingCountdown(){
 }
 
 async function loadRoute(){
- const route=await fetchJson('/route');
-routeCoords = route.map(
-    p => [p.lat,p.lon]
-);
+    if(routeLoaded || inFlightRoute) return;
 
-remainingRoute.setLatLngs(routeCoords);
-miniRouteLine.setLatLngs(routeCoords);
-await loadMilestones();
-setOverviewView();
-remainingRoute.bringToFront();
-completedRoute.bringToFront();
-mainGpsMarker.setZIndexOffset(1000);
+    inFlightRoute = true;
+
+    try{
+        const route=await fetchJsonSafely(
+            '/route',
+            {
+                validate:isArrayPayload
+            }
+        );
+
+        routeCoords = route
+            .filter(p => (
+                isFiniteNumber(p.lat)
+                && isFiniteNumber(p.lon)
+            ))
+            .map(
+                p => [Number(p.lat),Number(p.lon)]
+            );
+
+        remainingRoute.setLatLngs(routeCoords);
+        miniRouteLine.setLatLngs(routeCoords);
+        await loadMilestones();
+        routeLoaded = true;
+        setOverviewView();
+        remainingRoute.bringToFront();
+        completedRoute.bringToFront();
+        mainGpsMarker.setZIndexOffset(1000);
+    }
+    finally{
+        inFlightRoute = false;
+    }
 }
 
 async function loadMilestones(){
+    if(milestonesLoaded || inFlightMilestones) return;
 
-    const milestones = await fetchJson('/milestones');
+    inFlightMilestones = true;
 
-    milestoneMarkers.forEach(
-        marker => marker.remove()
-    );
-    milestoneMarkers = [];
+    try{
+        const milestones = await fetchJsonSafely(
+            '/milestones',
+            {
+                validate:isArrayPayload
+            }
+        );
 
-    milestones.forEach(milestone => {
+        milestoneMarkers.forEach(
+            marker => marker.remove()
+        );
+        milestoneMarkers = [];
+
+        milestones.forEach(milestone => {
+
+        if(
+            !isFiniteNumber(milestone.lat)
+            || !isFiniteNumber(milestone.lon)
+        ){
+            return;
+        }
 
         const isFinish = milestone.type === 'finish';
         const icon = L.divIcon({
@@ -927,7 +1085,7 @@ async function loadMilestones(){
                 (isFinish ? 'finish' : '') +
                 '">' +
                 '<div class="flag-label">' +
-                milestone.name +
+                escapeHtml(milestone.name || '') +
                 '</div>' +
                 '<div class="flag-emoji">' +
                 (isFinish ? '🏁' : '🚩') +
@@ -938,7 +1096,10 @@ async function loadMilestones(){
         });
 
         const marker = L.marker(
-            [milestone.lat, milestone.lon],
+            [
+                Number(milestone.lat),
+                Number(milestone.lon)
+            ],
             {
                 icon:icon,
                 interactive:false,
@@ -948,6 +1109,21 @@ async function loadMilestones(){
 
         milestoneMarkers.push(marker);
     });
+
+        milestonesLoaded = true;
+    }
+    finally{
+        inFlightMilestones = false;
+    }
+}
+
+function escapeHtml(value){
+    return String(value)
+        .replaceAll('&','&amp;')
+        .replaceAll('<','&lt;')
+        .replaceAll('>','&gt;')
+        .replaceAll('"','&quot;')
+        .replaceAll("'","&#39;");
 }
 
 function formatElapsedSeconds(totalSeconds){
@@ -972,121 +1148,205 @@ function showFinishView(stats){
     );
 
     clearInterval(updateTimer);
+    clearInterval(pointsTimer);
     clearInterval(healthTimer);
     clearInterval(cinematicTimer);
     clearInterval(countdownTimer);
+    clearTimeout(cinematicReturnTimer);
+    updateTimer = null;
+    pointsTimer = null;
+    healthTimer = null;
+    cinematicTimer = null;
+    countdownTimer = null;
+    cinematicReturnTimer = null;
 }
 
-async function update(){
-
-try{
- const stats=await fetchJson('/stats');
-
- elapsed.innerText = formatElapsedSeconds(
-    stats.elapsed_seconds || 0
-);
-
-if(
-    !marathonFinished &&
-    (stats.progress||0) >= 100
-){
-
-    marathonFinished = true;
-
-    showFinishView(stats);
-    return;
+function hasTrackerData(){
+    return lastPoints.length > 0;
 }
 
- distance.innerText=(stats.distance_km||0).toFixed(2)+' km';
- remaining.innerText=(stats.remaining_km||0).toFixed(2)+' km';
- //pace.innerText=(stats.pace_min_km||0)+' min/km';
- //eta.innerText=stats.eta_clock||'--:--';
+function applyStats(stats){
+    lastStats = stats;
 
- const gpsAge=stats.last_update_seconds||0;
+    elapsed.innerText = formatElapsedSeconds(
+        Math.max(
+            0,
+            Number(stats.elapsed_seconds) || 0
+        )
+    );
 
-if(gpsAge<=15){
-    lastgps.innerText='LIVE';
-}
-else if(gpsAge<=60){
-    lastgps.innerText='GOOD';
-}
-else{
-    lastgps.innerText='DELAYED';
-}
+    const progress = Math.max(
+        0,
+        Math.min(
+            Number(stats.progress) || 0,
+            100
+        )
+    );
 
- progressBar.style.width=(stats.progress||0)+'%';
- progressText.innerText=(stats.progress||0)+'%';
- renderRouteProgress(stats);
+    if(
+        !marathonFinished &&
+        progress >= 100
+    ){
 
+        marathonFinished = true;
+        connectionState = 'finished';
 
-
- const pts=await fetchJson('/points');
- if(pts.length){
-
-   const p=pts[pts.length-1];
-
-   gpsMarker.setLatLng([p.lat,p.lon]);
-
-mainGpsMarker.setLatLng([p.lat,p.lon]);
-
-miniMap.setView(
-    [p.lat,p.lon],
-    miniRunnerZoom(),
-    {
-        animate:false
+        showFinishView(stats);
+        return;
     }
-);
+
+    distance.innerText=(Number(stats.distance_km)||0).toFixed(2)+' km';
+    remaining.innerText=(Number(stats.remaining_km)||0).toFixed(2)+' km';
+
+    progressBar.style.width=progress+'%';
+    progressText.innerText=progress+'%';
+    renderRouteProgress(stats);
+
+    if(!hasTrackerData()){
+        connectionState = 'starting-soon';
+        setStatusBadge('Connected');
+        showStartingSoonView();
+        return;
+    }
+
+    const gpsAge=Number(stats.last_update_seconds)||0;
+
+    if(gpsAge<=GPS_FRESH_SECONDS){
+        connectionState = 'live';
+        setStatusBadge('Connected');
+        lastgps.innerText='LIVE';
+    }
+    else if(gpsAge<=GPS_STALE_SECONDS){
+        connectionState = 'live';
+        setStatusBadge('Connected');
+        lastgps.innerText='GOOD';
+    }
+    else{
+        connectionState = 'gps-stale';
+        setStatusBadge('GPS Stale');
+        lastgps.innerText='DELAYED';
+    }
+
+    showTrackerView();
 }
 
-}
-catch(error){
-    setBackendConnected(false);
-    showStartingSoonView();
-}
+function applyPoints(points){
+    lastPoints = points.filter(p => (
+        isFiniteNumber(p.lat)
+        && isFiniteNumber(p.lon)
+    ));
 
-}
-function cinematicZoom(){
+    if(!lastPoints.length){
+        return;
+    }
 
-    if(cinematicMode) return;
+    const p=lastPoints[lastPoints.length-1];
 
-    cinematicMode = true;
+    gpsMarker.setLatLng([
+        Number(p.lat),
+        Number(p.lon)
+    ]);
 
-    fetch(api('/points'))
-    .then(r => r.json())
-    .then(points => {
+    mainGpsMarker.setLatLng([
+        Number(p.lat),
+        Number(p.lon)
+    ]);
 
-        if(!points.length){
-            cinematicMode = false;
-            return;
+    miniMap.setView(
+        [Number(p.lat),Number(p.lon)],
+        miniRunnerZoom(),
+        {
+            animate:false
         }
+    );
+}
 
-        const p = points[points.length - 1];
+async function refreshStats(){
+    if(
+        marathonFinished
+        || connectionState === 'disconnected'
+        || inFlightStats
+    ){
+        return;
+    }
 
-        // Snap to runner
-        mainMap.setView(
-            [p.lat, p.lon],
-            runnerZoom(),
+    inFlightStats = true;
+
+    try{
+        const stats=await fetchJsonSafely(
+            '/stats',
             {
-                animate:false
+                validate:isStatsPayload
             }
         );
 
-        // Stay there 15 seconds
-        setTimeout(() => {
+        applyStats(stats);
+    }
+    catch(error){
+        enterDisconnectedState();
+    }
+    finally{
+        inFlightStats = false;
+    }
+}
 
-            // Snap back to overview
-            setOverviewView();
+async function refreshPoints(){
+    if(
+        marathonFinished
+        || connectionState === 'disconnected'
+        || inFlightPoints
+    ){
+        return;
+    }
 
-            cinematicMode = false;
+    inFlightPoints = true;
 
-        }, 15000);
+    try{
+        const points=await fetchJsonSafely(
+            '/points',
+            {
+                validate:isArrayPayload
+            }
+        );
 
-    })
-    .catch(() => {
+        applyPoints(points);
+
+        if(lastStats){
+            applyStats(lastStats);
+        }
+    }
+    catch(error){
+        enterDisconnectedState();
+    }
+    finally{
+        inFlightPoints = false;
+    }
+}
+function cinematicZoom(){
+
+    if(
+        cinematicMode
+        || connectionState === 'disconnected'
+        || !lastPoints.length
+    ) return;
+
+    cinematicMode = true;
+
+    const p = lastPoints[lastPoints.length - 1];
+
+    mainMap.setView(
+        [Number(p.lat), Number(p.lon)],
+        runnerZoom(),
+        {
+            animate:false
+        }
+    );
+
+    cinematicReturnTimer = setTimeout(() => {
+        setOverviewView();
         cinematicMode = false;
-        setBackendConnected(false);
-        showStartingSoonView();
-    });
+        cinematicReturnTimer = null;
+    }, 15000);
 }
 
 async function newMarathon(){
@@ -1094,27 +1354,174 @@ async function newMarathon(){
  await fetch(api('/new-marathon'),{method:'POST'});
  location.reload();
 }
-async function pollHealth(){
-    try{
-        const health = await fetchJson('/health');
-        setBackendConnected(
-            health.status === 'ok'
-            && health.gps_connected
-            && health.route_loaded
+function startHealthPolling(intervalMs){
+    if(
+        healthTimer
+        && healthIntervalMs === intervalMs
+    ){
+        return;
+    }
+
+    if(healthTimer){
+        clearInterval(healthTimer);
+    }
+
+    healthIntervalMs = intervalMs;
+    healthTimer = setInterval(
+        checkServerHealth,
+        intervalMs
+    );
+}
+
+function stopTrackerPolling(){
+    if(updateTimer){
+        clearInterval(updateTimer);
+        updateTimer = null;
+    }
+
+    if(pointsTimer){
+        clearInterval(pointsTimer);
+        pointsTimer = null;
+    }
+
+    if(cinematicTimer){
+        clearInterval(cinematicTimer);
+        cinematicTimer = null;
+    }
+
+    if(cinematicReturnTimer){
+        clearTimeout(cinematicReturnTimer);
+        cinematicReturnTimer = null;
+    }
+
+    cinematicMode = false;
+}
+
+function startTrackerPolling(){
+    if(!updateTimer){
+        updateTimer = setInterval(
+            refreshStats,
+            STATS_INTERVAL_MS
         );
     }
-    catch(error){
-        setBackendConnected(false);
-        showStartingSoonView();
+
+    if(!pointsTimer){
+        pointsTimer = setInterval(
+            refreshPoints,
+            POINTS_INTERVAL_MS
+        );
+    }
+
+    if(!cinematicTimer){
+        cinematicTimer = setInterval(
+            cinematicZoom,
+            CINEMATIC_INTERVAL_MS
+        );
     }
 }
 
-loadRoute().catch(
-    () => {
-        setBackendConnected(false);
-        showStartingSoonView();
+function enterConnectingState(){
+    if(marathonFinished) return;
+
+    connectionState = 'connecting';
+    showLoadingView(
+        'Connecting to live tracker...',
+        true
+    );
+    setStatusBadge('Connecting');
+}
+
+function enterDisconnectedState(){
+    if(marathonFinished) return;
+
+    connectionState = 'disconnected';
+    stopTrackerPolling();
+    setBackendConnected(false);
+
+    if(hasTrackerData() || routeLoaded || lastStats){
+        showTrackerView();
     }
-);
+    else{
+        showLoadingView(
+            'Disconnected',
+            false
+        );
+    }
+
+    startHealthPolling(
+        DISCONNECTED_HEALTH_INTERVAL_MS
+    );
+}
+
+async function initialiseTracker(){
+    if(trackerInitialised) return true;
+
+    await loadRoute();
+    trackerInitialised = true;
+    return true;
+}
+
+async function enterConnectedState(){
+    if(marathonFinished) return;
+
+    connectionState = 'online';
+
+    try{
+        await initialiseTracker();
+        await refreshPoints();
+        await refreshStats();
+
+        if(connectionState === 'disconnected'){
+            return;
+        }
+
+        startTrackerPolling();
+        startHealthPolling(
+            CONNECTED_HEALTH_INTERVAL_MS
+        );
+    }
+    catch(error){
+        enterDisconnectedState();
+    }
+}
+
+async function checkServerHealth(){
+    if(
+        marathonFinished
+        || inFlightHealth
+    ){
+        return;
+    }
+
+    inFlightHealth = true;
+
+    try{
+        const health = await fetchJsonSafely(
+            '/health',
+            {
+                timeoutMs:HEALTH_TIMEOUT_MS,
+                validate:isHealthPayload
+            }
+        );
+
+        if(health.status !== 'ok' && health.status !== 'online'){
+            throw new Error('Server is not healthy');
+        }
+
+        if(
+            connectionState === 'connecting'
+            || connectionState === 'disconnected'
+        ){
+            await enterConnectedState();
+        }
+    }
+    catch(error){
+        enterDisconnectedState();
+    }
+    finally{
+        inFlightHealth = false;
+    }
+}
 
 window.addEventListener('resize', () => {
     mainMap.invalidateSize();
@@ -1137,8 +1544,15 @@ function renderRouteProgress(stats){
         )
     );
 
-    const routePosition = stats.route_position
-        ? [stats.route_position.lat, stats.route_position.lon]
+    const routePosition = (
+        stats.route_position
+        && isFiniteNumber(stats.route_position.lat)
+        && isFiniteNumber(stats.route_position.lon)
+    )
+        ? [
+            Number(stats.route_position.lat),
+            Number(stats.route_position.lon)
+        ]
         : null;
 
     let completed = routeCoords.slice(
@@ -1169,11 +1583,11 @@ remainingRoute.setLatLngs(
     remaining
 );
 }
-update();
-updateTimer = setInterval(update,1000);
-pollHealth();
-healthTimer = setInterval(pollHealth,10000);
-cinematicTimer = setInterval(cinematicZoom,30000);
+enterConnectingState();
+checkServerHealth();
+startHealthPolling(
+    DISCONNECTED_HEALTH_INTERVAL_MS
+);
 updateStartingCountdown();
 countdownTimer = setInterval(updateStartingCountdown,1000);
 </script>
